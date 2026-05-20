@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ViRAG — Hệ thống Tóm tắt & Hỏi đáp Tiếng Việt</title>
+  <meta name="description"
+    content="Hệ thống RAG tiếng Việt sử dụng ViT5 với LoRA để tóm tắt tài liệu và trả lời câu hỏi." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <!-- ===================== HEADER ===================== -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="16" cy="16" r="14" stroke="url(#lg)" stroke-width="2" />
+            <path d="M10 16h12M16 10v12" stroke="url(#lg2)" stroke-width="2.5" stroke-linecap="round" />
+            <defs>
+              <linearGradient id="lg" x1="2" y1="2" x2="30" y2="30">
+                <stop stop-color="#6366f1" />
+                <stop offset="1" stop-color="#8b5cf6" />
+              </linearGradient>
+              <linearGradient id="lg2" x1="10" y1="10" x2="22" y2="22">
+                <stop stop-color="#a78bfa" />
+                <stop offset="1" stop-color="#c4b5fd" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="logo-name">ViRAG</span>
+        </div>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot" id="colabStatus" title="Trạng thái Model Server"></div>
+        <span class="status-label" id="colabLabel">Đang kiểm tra...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== MAIN ===================== -->
+  <main class="main">
+    <div class="workspace">
+
+      <!-- ===== PANEL TRÁI: TÀI LIỆU ===== -->
+      <section class="panel panel-left" id="panelDocument">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon doc-icon">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                <polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" />
+                <line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="10" y1="9" x2="8" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </div>
+            <h2 class="panel-title">Tài liệu</h2>
+          </div>
+          <button class="btn-icon" id="btnClearDoc" title="Xóa tài liệu" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none">
+              <polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M10 11v6M14 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Tab chọn loại đầu vào -->
+        <div class="input-tabs">
+          <button class="tab-btn active" id="tabText" onclick="switchTab('text')">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor"
+                stroke-width="1.5" />
+            </svg>
+            Văn bản
+          </button>
+          <button class="tab-btn" id="tabPdf" onclick="switchTab('pdf')">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M4 4v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5L14.5 2H6a2 2 0 0 0-2 2z" stroke="currentColor"
+                stroke-width="1.5" />
+              <path d="M14 2v7h7" stroke="currentColor" stroke-width="1.5" /><text x="7" y="17" font-size="6"
+                fill="currentColor" font-weight="bold">PDF</text>
+            </svg>
+            PDF
+          </button>
+        </div>
+
+        <!-- Input văn bản -->
+        <div class="input-section" id="sectionText">
+          <div class="textarea-wrapper">
+            <textarea id="textInput" class="doc-textarea"
+              placeholder="Nhập văn bản tiếng Việt vào đây...
+
+Hệ thống hỗ trợ văn bản có cấu trúc đề mục, tiểu mục (Chương 1, Mục 1.1, ...). Chunking sẽ được thực hiện tự động để tối ưu kết quả tóm tắt."
+              spellcheck="false"></textarea>
+            <div class="char-count" id="charCount">0 ký tự</div>
+          </div>
+          <button class="btn btn-primary" id="btnUploadText" onclick="uploadText()">
+            <svg viewBox="0 0 24 24" fill="none">
+              <polyline points="16 16 12 12 8 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" />
+              <line x1="12" y1="12" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Tải lên & Xử lý
+          </button>
+        </div>
+
+        <!-- Input PDF -->
+        <div class="input-section" id="sectionPdf" style="display:none">
+          <label class="drop-zone" id="dropZone" for="pdfInput">
+            <div class="drop-icon">
+              <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="8" y="4" width="40" height="56" rx="4" stroke="currentColor" stroke-width="2" />
+                <path d="M36 4v16h16" stroke="currentColor" stroke-width="2" />
+                <text x="14" y="44" font-size="11" fill="currentColor" font-weight="bold"
+                  font-family="sans-serif">PDF</text>
+              </svg>
+            </div>
+            <p class="drop-text">Kéo thả file PDF vào đây</p>
+            <p class="drop-hint">hoặc nhấn để chọn file</p>
+            <input type="file" id="pdfInput" accept=".pdf" hidden onchange="handleFileSelect(event)" />
+          </label>
+          <div class="file-info" id="fileInfo" style="display:none">
+            <div class="file-badge">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor"
+                  stroke-width="2" />
+              </svg>
+              <span id="fileName">document.pdf</span>
+            </div>
+            <button class="btn btn-primary" id="btnUploadPdf" onclick="uploadPdf()">
+              <svg viewBox="0 0 24 24" fill="none">
+                <polyline points="16 16 12 12 8 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" />
+                <line x1="12" y1="12" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+              Xử lý PDF
+            </button>
+          </div>
+        </div>
+
+        <!-- Thông tin tài liệu đã tải -->
+        <div class="doc-info" id="docInfo" style="display:none">
+          <div class="doc-info-header">
+            <span class="badge badge-success" id="docSuccessMessage">✓ Đã tải thành công</span>
+          </div>
+        </div>
+
+        <!-- Nút tóm tắt -->
+        <div class="summarize-section" id="summarizeSection" style="display:none">
+          <button class="btn btn-accent" id="btnSummarize" onclick="summarizeDocument()">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M4 6h16M4 10h10M4 14h6M4 18h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            Tóm tắt tài liệu
+          </button>
+        </div>
+
+      </section>
+
+      <!-- ===== RESIZABLE DIVIDER ===== -->
+      <div class="divider" id="resizeDivider">
+        <div class="divider-handle">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+
+      <!-- ===== PANEL PHẢI: HỎI ĐÁP ===== -->
+      <section class="panel panel-right" id="panelQA">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <div class="panel-icon qa-icon">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </div>
+            <h2 class="panel-title">Hỏi đáp</h2>
+          </div>
+          <button class="btn-icon" id="btnClearChat" onclick="clearChat()" title="Xóa lịch sử">
+            <svg viewBox="0 0 24 24" fill="none">
+              <polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Thông báo không có tài liệu -->
+        <div class="no-doc-notice" id="noDocNotice">
+          <div class="notice-icon">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" />
+              <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </div>
+          <p>Chưa có tài liệu. Câu hỏi sẽ được trả lời dựa trên kiến thức được train sẵn của model.</p>
+          <p class="notice-hint">Tải tài liệu bên trái để QA chính xác hơn.</p>
+        </div>
+
+        <!-- Khu vực hội thoại -->
+        <div class="chat-area" id="chatArea">
+          <div class="chat-welcome" id="chatWelcome">
+            <div class="welcome-icon">💬</div>
+            <p>Đặt câu hỏi về tài liệu của bạn</p>
+            <p class="welcome-hint">Model sẽ tìm thông tin liên quan trong tài liệu đã tải</p>
+          </div>
+        </div>
+
+        <!-- Input câu hỏi -->
+        <div class="chat-input-area">
+          <div class="input-row">
+            <input type="text" id="questionInput" class="question-input" placeholder="Đặt câu hỏi ngắn về tài liệu..."
+              maxlength="500"
+              onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); askQuestion(); }" />
+            <button class="btn btn-send" id="btnAsk" onclick="askQuestion()" title="Gửi câu hỏi">
+              <svg viewBox="0 0 24 24" fill="none">
+                <line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ===================== TOAST ===================== -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ===================== LOADING OVERLAY ===================== -->
+  <div class="loading-overlay" id="loadingOverlay" style="display:none">
+    <div class="loading-card">
+      <div class="spinner-ring"></div>
+      <p class="loading-text" id="loadingText">Đang xử lý...</p>
+      <p class="loading-sub" id="loadingSub"></p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
