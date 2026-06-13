@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from core.schemas import AskResponse, HealthResponse, QuestionRequest, TextUploadRequest
 from core.store import document_store
-from services.api_client import call_colab_retrieve, call_colab_summarize, call_ollama_answer
+from services.api_client import call_colab_index, call_colab_retrieve, call_colab_summarize, call_colab_summarize_batch, call_ollama_answer
 from services.document_processor import process_document
 from utils.grounding import is_answer_grounded
 
@@ -74,6 +74,14 @@ async def upload_text(request: TextUploadRequest):
     result = process_document(content=request.text)
     update_loaded_document(result)
 
+    # Gửi chunks lên Colab để encode & cache server-side (chạy background, không block)
+    asyncio.create_task(
+        call_colab_index(
+            chunks=result["chunks"],
+            chunk_headings=result.get("chunk_headings", []),
+        )
+    )
+
     preview = result["full_text"]
     return {
         "message": "Đã tải và xử lý văn bản thành công.",
@@ -109,6 +117,14 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     update_loaded_document(result)
 
+    # Gửi chunks lên Colab để encode & cache server-side (chạy background, không block)
+    asyncio.create_task(
+        call_colab_index(
+            chunks=result["chunks"],
+            chunk_headings=result.get("chunk_headings", []),
+        )
+    )
+
     preview = result["full_text"]
     return {
         "message": f"Đã tải PDF '{file.filename}' thành công.",
@@ -133,28 +149,29 @@ async def summarize_document():
     bullets = document_store.get("chunk_bullets", [])
 
     try:
+        # Gửi tất cả chunks trong 1 request duy nhất → giảm N round-trip qua Pinggy → 1
+        partial_summaries = await call_colab_summarize_batch(chunks)
+
+        # Đảm bảo số lượng summaries khớp với chunks
+        if len(partial_summaries) < len(chunks):
+            partial_summaries += [""] * (len(chunks) - len(partial_summaries))
+
         if len(chunks) == 1:
-            summary = await call_colab_summarize(chunks[0])
-            summary = prepend_bullet_prefix(summary, bullets[0] if bullets else "")
-            label = headings[0] if headings else "Nội dung"
-            summary = f"{label}\n{summary}"
+            summary_text = partial_summaries[0] if partial_summaries[0].strip() else ""
+            if summary_text:
+                summary_text = prepend_bullet_prefix(summary_text, bullets[0] if bullets else "")
+                label = headings[0] if headings else "Nội dung"
+                summary = f"{label}\n{summary_text}"
+            else:
+                raise HTTPException(status_code=500, detail="Tóm tắt thất bại.")
         else:
-            semaphore = asyncio.Semaphore(5)
-
-            async def summarize_chunk(chunk: str):
-                async with semaphore:
-                    return await call_colab_summarize(chunk)
-
-            tasks = [summarize_chunk(chunk) for chunk in chunks]
-            partial_summaries = await asyncio.gather(*tasks, return_exceptions=True)
-
             valid_pairs = [
                 (
                     headings[i] if i < len(headings) else f"Phần {i + 1}",
-                    prepend_bullet_prefix(summary, bullets[i] if i < len(bullets) else ""),
+                    prepend_bullet_prefix(s, bullets[i] if i < len(bullets) else ""),
                 )
-                for i, summary in enumerate(partial_summaries)
-                if isinstance(summary, str) and summary.strip()
+                for i, s in enumerate(partial_summaries)
+                if isinstance(s, str) and s.strip()
             ]
             if not valid_pairs:
                 raise HTTPException(
@@ -208,9 +225,11 @@ async def ask_question(request: QuestionRequest):
     try:
         relevant_chunks = await call_colab_retrieve(
             question=request.question,
-            chunks=document_store["chunks"],
-            chunk_headings=document_store.get("chunk_headings", []),
             top_k=request.top_k,
+            # Không gửi chunks nữa: Colab đã cache sau khi /index được gọi lúc upload.
+            # Fallback tự động nếu Colab chưa được index (gửi kèm chunks).
+            chunks=document_store["chunks"] if not document_store.get("colab_indexed") else None,
+            chunk_headings=document_store.get("chunk_headings", []) if not document_store.get("colab_indexed") else None,
         )
 
         if not relevant_chunks:

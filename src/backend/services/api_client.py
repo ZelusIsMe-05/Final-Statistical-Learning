@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import httpx
@@ -11,8 +12,74 @@ COLAB_TIMEOUT = httpx.Timeout(180.0, connect=30.0)
 OLLAMA_TIMEOUT = httpx.Timeout(90.0, connect=15.0)
 
 
+async def call_colab_index(chunks: list, chunk_headings: list | None = None) -> dict:
+    """
+    Gửi toàn bộ chunks lên Colab để encode và cache server-side.
+    Chỉ cần gọi 1 lần sau khi upload document.
+    Trả về dict: {"indexed_count": int, "message": str}
+    Nếu Colab chưa có endpoint /index (version cũ), silently return.
+    """
+    if chunk_headings is None:
+        chunk_headings = []
+
+    try:
+        async with httpx.AsyncClient(timeout=COLAB_TIMEOUT) as client:
+            resp = await client.post(
+                f"{COLAB_API_URL}/index",
+                json={
+                    "chunks": chunks,
+                    "chunk_headings": chunk_headings,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        # Colab cũ chưa có /index → bỏ qua, retrieve sẽ fallback gửi chunks
+        if exc.response.status_code == 404:
+            return {"indexed_count": 0, "message": "endpoint /index chưa tồn tại (Colab cũ)"}
+        raise
+    except Exception:
+        # Không chặn upload nếu index thất bại
+        return {"indexed_count": 0, "message": "index thất bại, sẽ fallback khi retrieve"}
+
+
+async def call_colab_retrieve(
+    question: str,
+    chunks: list | None = None,
+    chunk_headings: list | None = None,
+    top_k: int = 5,
+) -> list:
+    """
+    Retrieve chunks liên quan từ Colab.
+
+    Với Colab v3 (đã gọi /index): chỉ gửi câu hỏi → payload nhỏ → nhanh.
+    Với Colab v2 (chưa có /index): gửi kèm chunks như cũ (backward compat).
+    """
+    if chunk_headings is None:
+        chunk_headings = []
+
+    payload: dict = {
+        "question": question,
+        "top_k": top_k,
+    }
+
+    # Chỉ đính kèm chunks nếu được cung cấp (fallback cho Colab v2)
+    if chunks:
+        payload["chunks"] = chunks
+        payload["chunk_headings"] = chunk_headings
+
+    async with httpx.AsyncClient(timeout=COLAB_TIMEOUT) as client:
+        resp = await client.post(
+            f"{COLAB_API_URL}/retrieve",
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("relevant_chunks", [])
+
+
 async def call_colab_summarize(text_chunk: str, max_length: int = 200) -> str:
-    """Call the Colab model server summarization endpoint."""
+    """Call the Colab model server summarization endpoint (single chunk)."""
 
     async with httpx.AsyncClient(timeout=COLAB_TIMEOUT) as client:
         resp = await client.post(
@@ -24,30 +91,42 @@ async def call_colab_summarize(text_chunk: str, max_length: int = 200) -> str:
         return data.get("summary", "")
 
 
-async def call_colab_retrieve(
-    question: str,
-    chunks: list,
-    chunk_headings: list | None = None,
-    top_k: int = 3,
-) -> list:
-    """Call the Colab model server retrieval endpoint."""
+async def call_colab_summarize_batch(
+    chunks: list[str],
+    max_length: int = 200,
+) -> list[str]:
+    """
+    Gửi tất cả chunks trong 1 request duy nhất lên Colab để tóm tắt batch.
+    Nhanh hơn gọi N lần riêng lẻ vì giảm network round-trip qua Pinggy tunnel.
+    Trả về list summaries tương ứng theo thứ tự chunks đầu vào.
+    Nếu Colab chưa hỗ trợ /summarize_batch (endpoint cũ), fallback về N lần riêng lẻ.
+    """
+    if not chunks:
+        return []
 
-    if chunk_headings is None:
-        chunk_headings = []
+    try:
+        async with httpx.AsyncClient(timeout=COLAB_TIMEOUT) as client:
+            resp = await client.post(
+                f"{COLAB_API_URL}/summarize_batch",
+                json={"chunks": chunks, "max_length": max_length},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("summaries", [])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            # Fallback: Colab cũ chưa có /summarize_batch → gọi song song
+            semaphore = asyncio.Semaphore(5)
 
-    async with httpx.AsyncClient(timeout=COLAB_TIMEOUT) as client:
-        resp = await client.post(
-            f"{COLAB_API_URL}/retrieve",
-            json={
-                "question": question,
-                "chunks": chunks,
-                "chunk_headings": chunk_headings,
-                "top_k": top_k,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("relevant_chunks", [])
+            async def _single(chunk: str) -> str:
+                async with semaphore:
+                    return await call_colab_summarize(chunk, max_length)
+
+            results = await asyncio.gather(
+                *[_single(c) for c in chunks], return_exceptions=True
+            )
+            return [r if isinstance(r, str) else "" for r in results]
+        raise
 
 
 async def call_ollama_answer(

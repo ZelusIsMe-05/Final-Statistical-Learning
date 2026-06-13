@@ -6,9 +6,9 @@ import fitz
 PYMUPDF_AVAILABLE = True
 
 MAX_CHUNK_TOKENS = 700
-MAX_CHUNK_CHARS = 2000
+MAX_CHUNK_CHARS = 3000   # tăng từ 2000 → chunk giàu nội dung hơn, ít chunk hơn
 MIN_CHUNK_CHARS = 100
-OVERLAP_CHARS = 150
+OVERLAP_CHARS = 200      # tăng từ 150 → đảm bảo liên tục giữa các chunk
 
 HEADING_PATTERNS = [
     r"^(Chương|Chapter)\s+[\dIVXivx]+[\.:]?\s+.+",
